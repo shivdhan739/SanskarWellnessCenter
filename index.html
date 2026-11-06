@@ -161,7 +161,8 @@ details{background:#fff;border:1px solid var(--l);border-radius:12px;padding:12p
 <div class="g2"><div><label for="rn">👤 पूर्ण नाव *</label><input id="rn" maxlength="60" autocomplete="name"></div><div><label for="rm">📱 मोबाईल *</label><input id="rm" inputmode="numeric" maxlength="10" autocomplete="tel"></div>
 <div><label for="re">📧 ईमेल *</label><input id="re" type="email" autocomplete="email"></div><div><label for="rv">📍 गाव/शहर</label><input id="rv" maxlength="60" value="लोहा"></div></div>
 <label for="rg">🎯 ध्येय</label><select id="rg"><option>वजन कमी करणे</option><option>वजन वाढवणे</option></select>
-<div class="g2"><div><label for="rp">🔒 पासवर्ड (किमान 8) *</label><input id="rp" type="password" autocomplete="new-password"></div><div><label for="rp2">🔒 पासवर्ड पुन्हा *</label><input id="rp2" type="password" autocomplete="new-password"></div></div>
+<div class="g2"><div><label for="rp">🔒 पासवर्ड *</label><input id="rp" type="password" autocomplete="new-password"></div><div><label for="rp2">🔒 पासवर्ड पुन्हा *</label><input id="rp2" type="password" autocomplete="new-password"></div></div>
+<div class="s" id="rpw" style="margin:4px 0 8px">पासवर्ड: किमान 8 अक्षरे • A-Z • a-z • 0-9 • चिन्ह (@#$!)</div>
 <div class="cap" data-k="r"></div>
 <label style="font-weight:400"><input type="checkbox" id="rpp" style="width:auto;margin-right:6px"> मी <a href="#" onclick="go('priv');return false">गोपनीयता धोरण</a> वाचले व मान्य आहे</label><div class="m" id="rmsg"></div>
 <button class="btn" id="rbtn" onclick="doReg()">📩 OTP पाठवा व नोंदणी करा</button>
@@ -247,7 +248,17 @@ document.querySelectorAll('.cap').forEach(d=>{const k=d.dataset.k;d.innerHTML='<
 /* Rate limiting (क्लायंट-साइड; खरी मर्यादा firestore.rules + App Check मध्ये) */
 const ls={g:k=>{try{return localStorage.getItem(k)}catch(e){return null}},s:(k,v)=>{try{localStorage.setItem(k,v)}catch(e){}},r:k=>{try{localStorage.removeItem(k)}catch(e){}}};
 function lkWait(k){const u=+(ls.g('lk_u_'+k)||0);return Math.max(0,Math.ceil((u-Date.now())/1000))}
-function lkFail(k){const n=(+ls.g('lk_n_'+k)||0)+1;ls.s('lk_n_'+k,n);if(n>=5)ls.s('lk_u_'+k,Date.now()+Math.min(30,2**(n-5))*60000)}
+function lkFail(k){const n=(+ls.g('lk_n_'+k)||0)+1;ls.s('lk_n_'+k,n);if(n>=5)ls.s('lk_u_'+k,Date.now()+(k==='reg'?Math.min(30,2**(n-5))*60000:LOCK_H*3600000))}
+const LOCK_H=4;
+const sha=async t=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(t)))].map(x=>x.toString(16).padStart(2,'0')).join('');
+const normN=n=>n.toLowerCase().replace(/\s+/g,' ').trim();
+const strongPw=p=>p.length>=8&&/[a-z]/.test(p)&&/[A-Z]/.test(p)&&/\d/.test(p)&&/[^A-Za-z0-9]/.test(p);
+const fmtWait=ms=>{const m=Math.ceil(ms/60000),h=Math.floor(m/60);return h?h+' तास '+(m%60)+' मिनिटे':m+' मिनिटे'};
+const uniqKeys=async(n,mo,em)=>Promise.all([sha('n:'+normN(n)),sha('m:'+mo),sha('e:'+em.toLowerCase())]).then(a=>['n_'+a[0],'m_'+a[1],'e_'+a[2]]);
+async function lockInfo(em){let d=null,r=null,left=0;try{r=db.collection('loginLocks').doc(await sha('lock:'+em.toLowerCase()));const g=await r.get();d=g.exists?g.data():null}catch(e){}
+ if(d&&d.fails>=5&&d.lockedAt)left=d.lockedAt.toMillis()+LOCK_H*3600000-Date.now();return{r,d,left}}
+async function lockFail(li,em){if(!li.r)return 0;try{const d=li.d,fresh=!d||(d.fails>=5&&li.left<=0)||(d.last&&Date.now()-d.last.toMillis()>3600000),n=fresh?1:d.fails+1,t=TS(),o={email:em.toLowerCase(),fails:n,last:t};if(n>=5)o.lockedAt=t;await li.r.set(o);return n}catch(e){return 0}}
+async function lockClear(li){if(li&&li.r&&li.d){try{await li.r.delete()}catch(e){}}}
 function lkClear(k){ls.r('lk_n_'+k);ls.r('lk_u_'+k)}
 function cool(k,sec){const w=Math.ceil((+(ls.g('cd_'+k)||0)+sec*1000-Date.now())/1000);return w>0?w:0}
 const setCool=k=>ls.s('cd_'+k,Date.now());
@@ -261,28 +272,43 @@ async function saveZoom(){const u=$('azu').value.trim(),t=$('azt').value.trim();
 /* Auth */
 auth.onAuthStateChanged(async u=>{user=u;cust=null;if(u)loadZoom();$('navA').textContent=u?'माझे खाते':'लॉगिन';$('navA').onclick=()=>go(u?(u.uid===CFG.adminUid?'admin':'dash'):'login');
  if(u&&u.uid!==CFG.adminUid){try{const d=await db.collection('customers').doc(u.uid).get();cust=d.exists?d.data():null}catch(e){}}});
-async function doLogin(adm){const k=adm?'admin':'login',p=adm?'a':'l',w=lkWait(k),m=p==='a'?'am':'lm';
- if(w)return msg(m,'खूप प्रयत्न झाले. '+w+' सेकंदांनी पुन्हा प्रयत्न करा.');
+async function doLogin(adm){const k=adm?'admin':'login',p=adm?'a':'l',m=p==='a'?'am':'lm',em=$(p+'em').value.trim(),w=lkWait(k);
+ if(w)return msg(m,'🔒 खाते तात्पुरते लॉक आहे. '+fmtWait(w*1000)+' नंतर प्रयत्न करा.');
+ if(!em)return msg(m,'ईमेल टाका.');
+ const li=await lockInfo(em);
+ if(li.left>0){ls.s('lk_u_'+k,Date.now()+li.left);return msg(m,'🔒 ५ चुकीच्या प्रयत्नांमुळे खाते लॉक आहे. '+fmtWait(li.left)+' नंतर प्रयत्न करा.')}
  if(!capOk(p))return msg(m,'कॅप्चा चुकीचा आहे.');
- try{const c=await auth.signInWithEmailAndPassword($(p+'em').value.trim(),$(p+'pw').value);
+ try{const c=await auth.signInWithEmailAndPassword(em,$(p+'pw').value);
   if(adm&&c.user.uid!==CFG.adminUid){await auth.signOut();throw 0}
-  lkClear(k);$(p+'pw').value='';msg(m,'');adm?loadAdmin():go('dash')}catch(e){lkFail(k);capNew(p);msg(m,'ईमेल किंवा पासवर्ड चुकीचा.')}}
+  lkClear(k);await lockClear(li);$(p+'pw').value='';msg(m,'');adm?loadAdmin():go('dash')}
+ catch(e){capNew(p);const cd=e&&e.code;
+  if(cd==='auth/network-request-failed')return msg(m,'इंटरनेट कनेक्शन तपासा.');
+  if(cd==='auth/too-many-requests')return msg(m,'खूप प्रयत्न झाले. थोड्या वेळाने पुन्हा प्रयत्न करा.');
+  lkFail(k);const n=await lockFail(li,em),loc=+(ls.g('lk_n_'+k)||0);
+  if(n>=5||loc>=5)msg(m,'🔒 ५ वेळा चुकीचा पासवर्ड – खाते '+LOCK_H+' तासांसाठी लॉक केले आहे.');
+  else msg(m,'ईमेल किंवा पासवर्ड चुकीचा. उरलेले प्रयत्न: '+(5-Math.max(n,loc)))}}
 async function doReg(){const v=i=>$(i).value.trim(),n=v('rn'),mo=v('rm'),em=v('re'),p=$('rp').value,w=lkWait('reg')||cool('reg',30);
  if(w)return msg('rmsg',w+' सेकंदांनी पुन्हा प्रयत्न करा.');
  if(n.length<3||!/^[6-9]\d{9}$/.test(mo)||!em)return msg('rmsg','नाव, 10 अंकी मोबाईल व ईमेल योग्य भरा.');
- if(p.length<8||p!==$('rp2').value)return msg('rmsg','पासवर्ड किमान 8 अक्षरे व दोन्ही सारखे हवेत.');
+ if(!strongPw(p))return msg('rmsg','पासवर्ड किमान 8 अक्षरे हवा: मोठे (A-Z), लहान (a-z), अंक (0-9) व चिन्ह (@ # $ !) आवश्यक.');
+ if(p!==$('rp2').value)return msg('rmsg','दोन्ही पासवर्ड सारखे हवेत.');
  if(!$('rpp').checked)return msg('rmsg','गोपनीयता धोरण मान्य करा.');
  if(!capOk('r'))return msg('rmsg','कॅप्चा चुकीचा आहे.');
+ try{const ks=await uniqKeys(n,mo,em),gs=await Promise.all(ks.map(x=>db.collection('uniq').doc(x).get())),ms=['या नावाने','या मोबाईल नंबरने','या ईमेलने'],f=gs.findIndex(x=>x.exists);
+  if(f>=0){capNew('r');return msg('rmsg',ms[f]+' आधीच नोंदणी झाली आहे. वेगळे तपशील वापरा किंवा लॉगिन करा.')}}catch(_){}
  setCool('reg');
  try{await sendOtp()}catch(e){PEND=null;return msg('rmsg','OTP ईमेल पाठवता आला नाही. ईमेल तपासा किंवा नंतर प्रयत्न करा. ['+(e.message||e)+']')}
  $('otpBox').style.display='block';$('rbtn').style.display='none';msg('rmsg','OTP पाठवला आहे. ईमेल तपासा.',1)}
 async function finishReg(){const v=i=>$(i).value.trim(),n=v('rn'),mo=v('rm'),em=v('re'),p=$('rp').value;
- try{const c=await auth.createUserWithEmailAndPassword(em,p);
-  await db.collection('customers').doc(c.user.uid).set({name:n,mobile:mo,email:em,village:v('rv'),goal:$('rg').value,createdAt:TS()});
+ let c=null;try{c=await auth.createUserWithEmailAndPassword(em,p);
+  const ks=await uniqKeys(n,mo,em),t=TS(),bt=db.batch();
+  bt.set(db.collection('customers').doc(c.user.uid),{name:n,mobile:mo,email:em,village:v('rv'),goal:$('rg').value,createdAt:t});
+  ks.forEach(x=>bt.set(db.collection('uniq').doc(x),{uid:c.user.uid,createdAt:t}));
+  await bt.commit();
   cust={name:n,mobile:mo};
  adminNotify('🆕 नवीन नोंदणी: '+n,'नवीन सदस्य नोंदणी\nनाव: '+n+'\nमोबाईल: '+mo+'\nईमेल: '+em+'\nगाव: '+v('rv')+'\nध्येय: '+$('rg').value);
  sendMail(em,n,'🌿 स्वागत – संस्कार वेलनेस सेंटर','नमस्कार '+n+' जी,\n\nतुमचे खाते तयार झाले आहे. झूम व्यायाम सत्रासाठी लॉगिन करून नोंदणी करा.\n\nसंस्कार वेलनेस सेंटर, लोहा, नांदेड',mailHtml('स्वागत आहे, '+esc(n)+' जी! 🎉','<p style="font-size:16px">तुमचे खाते <b>यशस्वीरीत्या तयार</b> झाले आहे. आता तुम्ही आमच्या निरोगी परिवाराचा भाग आहात! 🌿</p><div style="background:#f4fbf4;border-radius:14px;padding:14px 18px"><b style="color:#1b5e2a">आता पुढे काय?</b><br>✅ लॉगिन करा<br>✅ झूम सत्रासाठी बॅच निवडून नोंदणी करा<br>✅ जॉईन करताना नावाआधी कोच क्रमांक <b>'+esc(CFG.coachCode)+'</b> टाका</div>',[['▶ लॉगिन करा',CFG.siteUrl||'https://wa.me/91'+CFG.phone],['💬 WhatsApp','https://wa.me/91'+CFG.phone,'#25d366']],'🎉 खाते तयार – स्वागत आहे!','तुमचे खाते तयार झाले आहे.')).catch(()=>{});go('dash')}
- catch(e){lkFail('reg');cancelOtp();msg('rmsg',e.code==='auth/email-already-in-use'?'हा ईमेल आधीच नोंदणीकृत आहे.':'नोंदणी अयशस्वी. पुन्हा प्रयत्न करा.')}}
+ catch(e){lkFail('reg');if(c&&c.user&&e.code==='permission-denied'){try{await c.user.delete()}catch(_){}}cancelOtp();msg('rmsg',e.code==='auth/email-already-in-use'?'हा ईमेल आधीच नोंदणीकृत आहे.':e.code==='permission-denied'?'हे नाव, मोबाईल किंवा ईमेल आधीच नोंदणीकृत आहे.':'नोंदणी अयशस्वी. पुन्हा प्रयत्न करा.')}}
 async function doForgot(){const w=cool('fp',60);if(w)return msg('fm',w+' सेकंदांनी पुन्हा प्रयत्न करा.');
  if(!capOk('f'))return msg('fm','कॅप्चा चुकीचा आहे.');setCool('fp');
  try{await auth.sendPasswordResetEmail($('fem').value.trim())}catch(e){}
@@ -404,13 +430,13 @@ function waContact(){const n=$('cn').value.trim();const t='नमस्कार
 async function sendContact(){const n=$('cn').value.trim(),m=$('cm').value.trim(),e=$('ce').value.trim(),sj=$('cs').value,g=$('cg').value.trim();
  if(n.length<2||!/^[6-9]\d{9}$/.test(m)||!/^\S+@\S+\.\S+$/.test(e))return msg('cmsg','कृपया योग्य नाव, १० अंकी मोबाईल आणि ईमेल टाका.');
  if(!capOk('c'))return msg('cmsg','कॅप्चा कोड चुकीचा आहे.');
-  let hid=null;try{hid=[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(e.toLowerCase())))].map(x=>x.toString(16).padStart(2,'0')).join('')}catch(_){}
- const ck='c_'+(hid||e.toLowerCase()).slice(0,24);
- if(cool(ck,86400))return msg('cmsg','या ईमेलवरून 24 तासांत आधीच चौकशी पाठवली आहे. कृपया उद्या पुन्हा प्रयत्न करा किंवा कॉल/WhatsApp करा.');
+  let ids=[];try{ids=await Promise.all([sha(e.toLowerCase()),sha('m:'+m),sha('n:'+normN(n))])}catch(_){}
+ const cks=(ids.length?ids:[e.toLowerCase(),'m:'+m,'n:'+normN(n)]).map(x=>'c_'+x.slice(0,24));
+ if(cks.some(k=>cool(k,86400)))return msg('cmsg','या ईमेल, मोबाईल किंवा नावावरून 24 तासांत आधीच चौकशी पाठवली आहे. कृपया उद्या पुन्हा प्रयत्न करा किंवा कॉल/WhatsApp करा.');
  const b=$('cbtn');b.disabled=true;b.innerHTML='<span class="spin"></span>पाठवत आहे…';
  const gh=esc(g||'—').replace(/\n/g,'<br>');
-  try{const t=TS(),bt=db.batch();if(hid)bt.set(db.collection('limits').doc(hid),{last:t});bt.set(db.collection('contacts').doc(),{name:n,mobile:m,email:e,subject:sj,message:g,createdAt:t});await bt.commit()}
- catch(x){console.error('contact save',x);if(x.code==='permission-denied'){console.error('Firestore rules: limits/contacts denied. Jar navin ईमेलवरही हे yet asel tar firestore.rules Publish kela ka te tapasa.');b.disabled=false;b.textContent='✉️ संदेश पाठवा';return msg('cmsg','आत्ता चौकशी पाठवता आली नाही. या ईमेलवरून 24 तासांत आधी पाठवली असेल तर उद्या प्रयत्न करा, अन्यथा कॉल/WhatsApp करा.')}}
+  try{const t=TS(),bt=db.batch();ids.forEach(x=>bt.set(db.collection('limits').doc(x),{last:t}));bt.set(db.collection('contacts').doc(),{name:n,mobile:m,email:e,subject:sj,message:g,createdAt:t});await bt.commit()}
+ catch(x){console.error('contact save',x);if(x.code==='permission-denied'){console.error('Firestore rules: limits/contacts denied. Jar navin ईमेलवरही हे yet asel tar firestore.rules Publish kela ka te tapasa.');b.disabled=false;b.textContent='✉️ संदेश पाठवा';return msg('cmsg','आत्ता चौकशी पाठवता आली नाही. या ईमेल/मोबाईल/नावावरून 24 तासांत आधी पाठवली असेल तर उद्या प्रयत्न करा, अन्यथा कॉल/WhatsApp करा.')}}
  const step=(i,t)=>'<tr><td width="36" valign="top"><div style="width:28px;height:28px;border-radius:50%;background:#2e8b3e;color:#fff;text-align:center;line-height:28px;font-weight:700">'+i+'</div></td><td style="padding-bottom:10px">'+t+'</td></tr>';
  const userHtml=thankYouHtml(n,sj,gh);
  const userTxt='Dear Valued Visitor,\n\nThank you for contacting Sanskar Wellness Center. Our team will connect with you shortly.\nआमची टीम लवकरच तुमच्याशी संपर्क साधेल.\n\nHEALTH IS WEALTH – आरोग्य हीच खरी संपत्ती!\nTeam Sanskar Wellness Center | Heal • Balance • Live Better';
@@ -420,7 +446,7 @@ async function sendContact(){const n=$('cn').value.trim(),m=$('cm').value.trim()
  adminNotify('🔔 नवीन चौकशी: '+n,admTxt,admHtml);
  try{await sendMail(e,n,'🌿 Thank You for Contacting Sanskar Wellness Center – Health is Wealth!',userTxt,userHtml);
   
-  setCool(ck);msg('cmsg','✅ संदेश पाठवला! पुष्टी ईमेल तुमच्या Inbox/Spam मध्ये तपासा.',1);showThanks();['cn','cm','ce','cg'].forEach(i=>$(i).value='');capNew('c')}
+  cks.forEach(setCool);msg('cmsg','✅ संदेश पाठवला! पुष्टी ईमेल तुमच्या Inbox/Spam मध्ये तपासा.',1);showThanks();['cn','cm','ce','cg'].forEach(i=>$(i).value='');capNew('c')}
  catch(x){msg('cmsg','ईमेल पाठवता आला नाही, पण तुमची चौकशी नोंदवली आहे. WhatsApp वापरू शकता.')}b.disabled=false;b.textContent='✉️ संदेश पाठवा'}
 async function loadContacts(){try{const q=await db.collection('contacts').orderBy('createdAt','desc').limit(100).get();$('acq').innerHTML=q.docs.map(d=>{const x=d.data();return '<tr><td>'+esc(x.name)+'</td><td><a href="tel:+91'+esc(x.mobile)+'">'+esc(x.mobile)+'</a></td><td>'+esc(x.email)+'</td><td>'+esc(x.subject)+'</td><td>'+esc(x.message)+'</td><td><button class="btn" onclick="delC(\''+d.id+'\')">🗑</button></td></tr>'}).join('')||'<tr><td colspan=6>अजून चौकशी नाही</td></tr>'}catch(e){}}
 async function delC(id){if(confirm('ही चौकशी हटवायची?')){await db.collection('contacts').doc(id).delete();loadContacts()}}
@@ -481,6 +507,9 @@ function showThanks(){$('tyt').textContent='आजचा टिप: '+TIPS[Math.
 $('tyx').onclick=()=>$('ty').hidden=true;$('ty').onclick=e=>{if(e.target.id==='ty')$('ty').hidden=true};
 $('cg').addEventListener('input',()=>$('cgc').textContent=$('cg').value.length);
 
+/* password strength hint */
+$('rp').addEventListener('input',()=>{const p=$('rp').value,c=[[p.length>=8,'8+ अक्षरे'],[/[A-Z]/.test(p),'A-Z'],[/[a-z]/.test(p),'a-z'],[/\d/.test(p),'0-9'],[/[^A-Za-z0-9]/.test(p),'चिन्ह']];
+ $('rpw').innerHTML='पासवर्ड: '+c.map(x=>'<span style="color:'+(x[0]?'#2e8b3e':'#b3261e')+'">'+(x[0]?'✔ ':'✖ ')+x[1]+'</span>').join(' • ')});
 /* WhatsApp lead form */
 (function(){let G='';const cs=$('wlg');
 cs.onclick=e=>{const b=e.target.closest('button');if(!b)return;G=b.dataset.g;[...cs.children].forEach(x=>x.classList.toggle('on',x===b));$('wlm').textContent=''};
